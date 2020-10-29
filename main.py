@@ -1,3 +1,4 @@
+import re
 import os
 import sys
 import requests
@@ -20,13 +21,14 @@ class Downloader:
             self.chunk_range = chunk_range  # chunk range to download from server
             self.was_interrupted = was_interrupted  # flag to denote if the job was interrupted due to some error
 
-    def __init__(self, url=None, number_of_threads=1):
+    def __init__(self, url=None, number_of_threads=1, target_filename=None):
         """Constructor of Downloader class
         :param url: URL of file to be downloaded (optional)
         :param number_of_threads: Maximum number of threads (optional)
         """
         self.url = url  # url of a file to be downloaded
         self.number_of_threads = number_of_threads  # maximum number of threads
+        self.headers = self.get_headers()
         self.file_size = self.get_file_size()  # remote file's size
         self.if_byte_range = self.is_byte_range_supported()  # if remote server supports byte range
         self.remote_crc32c = self.get_remote_crc32c()  # remote file's checksum
@@ -35,13 +37,34 @@ class Downloader:
         self.range_list = list()  # byte range for each download thread
         self.start_time = None  # start time to calculate overall download time
         self.end_time = None  # end time to calculate overall download time
-        self.target_filename = os.path.basename(self.url)  # name of a file to be downloaded
+        # name of a file to be downloaded
+        if target_filename:
+            self.target_filename = target_filename
+        else:
+            self.target_filename = self.determine_filename()
         self.status_refresh_rate = 2  # status will be refreshed after certain time (in seconds)
         self.download_durations = [None] * self.number_of_threads  # total download time for each thread (for benchmarking)
         self.q = queue.Queue(maxsize=0)  # worker threads will pick download job from the queue
         self.append_write = "wb"  # default mode will be write in binary
         self.download_status = list()  # current download job status of each thread (for benchmarking)
         self.current_status = ""  # current overall status
+
+    def get_headers(self):
+        return requests.head(self.url, headers={'Accept-Encoding': 'identity'}).headers
+
+    def determine_filename(self):
+        filename = os.path.basename(self.url)
+
+        if not filename:
+            content_disposition = self.headers.get('content-disposition')
+            if content_disposition:
+                server_filename = re.search(r'filename="([^"]+)"', content_disposition)
+                if server_filename:
+                    filename = server_filename[1]
+
+        if not filename:
+            raise ValueError("Could not determine target filename")
+        return filename
 
     def get_url(self):
         """Returns URL of a file to be downloaded"""
@@ -75,14 +98,15 @@ class Downloader:
         """Get remote file size in bytes from url
         :return: integer
         """
-        self.file_size = requests.head(self.url, headers={'Accept-Encoding': 'identity'}).headers.get('content-length', None)
+        #self.file_size = requests.head(self.url, headers={'Accept-Encoding': 'identity'}).headers.get('content-length', None)
+        self.file_size = self.headers.get('content-length', None)
         return int(self.file_size)
 
     def is_byte_range_supported(self):
         """Return True if accept-range is supported by the url else False
         :return: boolean
         """
-        server_byte_response = requests.head(self.url, headers={'Accept-Encoding': 'identity'}).headers.get('accept-ranges')
+        server_byte_response = self.headers.get('accept-ranges')
         if not server_byte_response or server_byte_response == "none":
             return False
         else:
@@ -315,22 +339,27 @@ if __name__ == '__main__':
     For ex.:
         1. obj = Downloader("https://storage.googleapis.com/vimeo-test/work-at-vimeo-2.mp4", 10)
         2. obj = Downloader("http://i.imgur.com/z4d4kWk.jpg", 3)
-        
+
     Once objects are created, call start_download function as obj.start_download()
     """
 
     url = ""
     threads = ""
+    filename = ""
+
     arguments_list = getopts(sys.argv)
+
     if '-url' in arguments_list:
         url = arguments_list['-url']
     if '-threads' in arguments_list:
         threads = int(arguments_list['-threads'])
+    if '-filename' in arguments_list:
+        filename = arguments_list['-filename']
 
     if not url or not threads:
         raise ValueError("Please provide required arguments.")
 
-    obj = Downloader(url, threads)
+    obj = Downloader(url, threads, filename)
     # obj = Downloader("https://storage.googleapis.com/vimeo-test/work-at-vimeo-2.mp4", 10)
     # obj = Downloader("http://i.imgur.com/z4d4kWk.jpg", 3)
 
